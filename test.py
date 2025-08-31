@@ -47,7 +47,8 @@ def _feature_index_from_error(err) -> int | None:
     Return the index after 'features' in the instance path, else None.
     Works with jsonschema_rs errors.
     """
-    path = list(getattr(err, "path", [])) or list(getattr(err, "instance_path", []))
+    """Return the feature index derived from the instance path if present."""
+    path = list(getattr(err, "instance_path", []))
     for i, seg in enumerate(path):
         if seg == "features" and i + 1 < len(path) and isinstance(path[i + 1], int):
             return path[i + 1]
@@ -55,38 +56,45 @@ def _feature_index_from_error(err) -> int | None:
 
 
 def _clean_enum_message(err) -> str:
-    """
-    Build a compact enum message and strip the 'or N other candidates' suffix.
-    """
-    given = json.dumps(getattr(err, "instance", None))
-    allowed = []
-    try:
-        allowed = list(getattr(err, "validator_value", [])) or []
-    except Exception:
-        allowed = []
-    if allowed:
-        preview = ', '.join(json.dumps(v) for v in allowed[:2])
-        return f'{given} is not one of {preview}'
-    # Fallback to trimming the library message
+    """Return a compact enum error message."""
     msg = getattr(err, "message", "")
     msg = re.sub(r'\s*or\s+\d+\s+other candidates', '', msg)
     return msg.split('\n')[0]
+    msg = re.sub(r"\s*or\s+\d+\s+other candidates", "", msg)
+    return msg.split("\n")[0]
 
 
-def _pretty_message(err) -> str:
-    if getattr(err, "validator", None) == "enum":
+def _pretty_message(err, schema) -> str:
+    kind = type(getattr(err, "kind", object())).__name__.split("_")[-1]
+    if kind == "Enum":
         return _clean_enum_message(err)
-    # Trim any multi-line noise
-    return getattr(err, "message", "").split('\n')[0]
+    if kind == "AnyOf":
+        # walk schema to gather required fields in anyOf branches
+        sub = schema
+        try:
+            for seg in getattr(err, "schema_path", []):
+                sub = sub[seg]
+            required = set()
+            if isinstance(sub, list):
+                stack = list(sub)
+                while stack:
+                    cur = stack.pop()
+                    if isinstance(cur, dict):
+                        if isinstance(cur.get("required"), list):
+                            required.update(cur["required"])
+                        for key in ("allOf", "anyOf", "oneOf"):
+                            if isinstance(cur.get(key), list):
+                                stack.extend(cur[key])
+            if required:
+                props = ", ".join(sorted(required))
+                return f"must include one of: {props}"
+        except Exception:
+            pass
+    return getattr(err, "message", "").split("\n")[0]
 
 
-def collect_feature_errors(validator, geojson):
-    """
-    Run validation and return a list of primary errors per feature:
-    [{ "featureIndex": int|-1, "error": str }, ...]
-    - Groups all errors by feature index
-    - Prefers root-cause messages (enum/type/required) over noisy cascades (anyOf/dependencies)
-    """
+def collect_feature_errors(validator, geojson, schema):
+    """Validate and return a list of representative errors per feature."""
     raw_errors = list(validator.iter_errors(geojson))
     grouped = defaultdict(list)
     for e in raw_errors:
@@ -94,11 +102,11 @@ def collect_feature_errors(validator, geojson):
         grouped[idx].append(e)
 
     def rank(e):
-        v = getattr(e, "validator", "")
+        kind = type(getattr(e, "kind", object())).__name__.split("_")[-1]
         return (
-            0 if v == "enum" else
-            1 if v in {"type", "required", "const"} else
-            2 if v in {"pattern", "minimum", "maximum"} else
+            0 if kind == "Enum" else
+            1 if kind in {"Type", "Required", "Const"} else
+            2 if kind in {"Pattern", "Minimum", "Maximum"} else
             3,
             len(getattr(e, "message", "")),
         )
@@ -108,7 +116,7 @@ def collect_feature_errors(validator, geojson):
         best = sorted(errs, key=rank)[0]
         results.append({
             "featureIndex": idx if idx is not None else -1,
-            "error": _pretty_message(best),
+            "error": _pretty_message(best, schema),
         })
 
     results.sort(key=lambda r: (r["featureIndex"], r["error"]))
@@ -120,11 +128,11 @@ def collect_feature_errors(validator, geojson):
 # -----------------------------
 if __name__ == "__main__":
     # Choose which schema to use here; you can switch to POINT_SCHEMA/POLY_SCHEMA if needed.
-    schema = load_osw_schema(LINE_STRING_SCHEMA)
-    geojson_data = load_osw_file(VALID_FILE)
+    schema = load_osw_schema(ORIGINAL_SCHEMA)
+    geojson_data = load_osw_file(INVALID_FILE)
 
     validator = jsonschema_rs.Draft7Validator(schema)
-    errors_out = collect_feature_errors(validator, geojson_data)
+    errors_out = collect_feature_errors(validator, geojson_data, schema)
 
     # Print ALL errors (array of objects) in the requested format
     print(json.dumps(errors_out, ensure_ascii=False))

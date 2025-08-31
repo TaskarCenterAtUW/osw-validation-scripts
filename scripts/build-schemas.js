@@ -187,6 +187,20 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
     required: ['type', 'features'],
     additionalProperties: false,
     properties: {
+      $schema: {
+        description: 'A field for the schema id.',
+        enum: ['https://sidewalks.washington.edu/opensidewalks/0.2/schema.json'],
+        type: 'string',
+      },
+      dataSource: {
+        additionalProperties: true,
+        properties: {},
+        type: 'object',
+      },
+      dataTimestamp: {
+        format: 'date-time',
+        type: 'string',
+      },
       type: {
         title: 'Feature Collection',
         type: 'string',
@@ -288,14 +302,24 @@ const aggregateForGroup = (items) => {
   
   // Build "dependencies" object:
   // If a property has multiple contexts, use anyOf over those context-sets.
+  // Deduplicate identical context sets to avoid repeated schema branches.
   const dependencies = {};
   for (const [prop, contexts] of Object.entries(deps)) {
     if (!contexts.length) continue;
-    if (contexts.length === 1) {
-      dependencies[prop] = {allOf: contexts[0]};
+    const uniqueContexts = [];
+    const seen = new Set();
+    for (const ctx of contexts) {
+      const key = JSON.stringify(ctx);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueContexts.push(ctx);
+    }
+    
+    if (uniqueContexts.length === 1) {
+      dependencies[prop] = { allOf: uniqueContexts[0] };
     } else {
       dependencies[prop] = {
-        anyOf: contexts.map(ctx => ({allOf: ctx})),
+        anyOf: uniqueContexts.map(ctx => ({ allOf: ctx })),
       };
     }
   }

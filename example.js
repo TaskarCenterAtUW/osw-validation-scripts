@@ -44,7 +44,7 @@ const Polygon = ['Building', 'PedestrianZone'];
 
 (async () => {
   await generateGeojsonSamples(
-    Line,
+    Point,
     {
       schemaPath: path.join(schemaDir, 'opensidewalks.schema.json'),
       validOut: 'my_valid.geojson',
