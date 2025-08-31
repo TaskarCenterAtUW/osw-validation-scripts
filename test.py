@@ -16,8 +16,8 @@ LINE_STRING_SCHEMA = os.path.join(OUTPUT_PATH, 'lineSchema.json')
 POINT_SCHEMA = os.path.join(OUTPUT_PATH, 'pointsSchema.json')
 POLY_SCHEMA = os.path.join(OUTPUT_PATH, 'PolygonSchema.json')
 
-VALID_FILE = 'my_valid.geojson'
-INVALID_FILE = 'my_invalid.geojson'
+VALID_FILE = 'my_valid.geojson' # Update with your valid file path
+INVALID_FILE = 'my_invalid.geojson' # Update with your invalid file path
 
 
 # -----------------------------
@@ -128,8 +128,8 @@ def collect_feature_errors(validator, geojson, schema):
 # -----------------------------
 if __name__ == "__main__":
     # Choose which schema to use here; you can switch to POINT_SCHEMA/POLY_SCHEMA if needed.
-    schema = load_osw_schema(ORIGINAL_SCHEMA)
-    geojson_data = load_osw_file(INVALID_FILE)
+    schema = load_osw_schema(POINT_SCHEMA) # choose schema here
+    geojson_data = load_osw_file(INVALID_FILE) # choose file here
 
     validator = jsonschema_rs.Draft7Validator(schema)
     errors_out = collect_feature_errors(validator, geojson_data, schema)

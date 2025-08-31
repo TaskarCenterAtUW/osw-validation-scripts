@@ -79,7 +79,8 @@ The output is a JSON array of errors:
 ### Customization
 
 - `RENAME_MAP` in JS scripts allows renaming schema keys (e.g., `_id → id`).
-- `DISCRIMINATORS` defines tags (`highway`, `amenity`, etc.) used for property dependencies.
+- `DISCRIMINATORS` defines tags (`highway`, `amenity`, `building`, etc.) used for property dependencies.
+- `META_KEYS` lists common fields (e.g., `name`) that skip dependency checks.
 - `test.py` prefers root-cause errors (`enum`, `type`, `required`) and collapses noisy cascades.
 
 

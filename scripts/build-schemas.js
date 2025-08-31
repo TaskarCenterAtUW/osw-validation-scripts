@@ -17,8 +17,13 @@ const DISCRIMINATORS = new Set([
   'amenity',
   'power',
   'man_made',
+  'building',
 ]);
 
+// Properties that should not trigger dependency requirements
+const META_KEYS = new Set([
+  'name',
+]);
 
 const readJson = (p) => {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -215,7 +220,7 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
         items: {
           title: 'FeatureObject',
           type: 'object',
-          required: ['type', 'geometry'],
+          required: ['type', 'geometry', 'properties'],
           additionalProperties: false,
           properties: {
             type: {
@@ -230,6 +235,10 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
               type: 'object',
               additionalProperties: false,
               properties: propertiesObj,
+              required: ['_id'],
+              patternProperties: {
+                '^ext:': {},
+              },
               ...(Object.keys(dependenciesObj || {}).length
                 ? {dependencies: dependenciesObj}
                 : {}),
@@ -292,6 +301,9 @@ const aggregateForGroup = (items) => {
     if (discriminatorClauses.length) {
       for (const key of Object.keys(propsCloned)) {
         if (DISCRIMINATORS.has(key)) continue; // don't create self-dependency
+        if (key.startsWith('_')) continue; // allow metadata fields like _id without extra tags
+        if (key.startsWith('ext:')) continue; // allow extension tags without extra tags
+        if (META_KEYS.has(key)) continue; // allow generic metadata fields like name
         // Initialize bucket
         if (!deps[key]) deps[key] = [];
         // Push this item's condition set
