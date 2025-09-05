@@ -206,6 +206,15 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
         format: 'date-time',
         type: 'string',
       },
+      pipelineVersion: {
+        additionalProperties: true,
+        properties: {},
+        type: 'object',
+      },
+      region: {
+        ...geometrySchemaFor(['MultiPolygon']),
+        description: 'MultiPolygon geometry object.',
+      },
       type: {
         title: 'Feature Collection',
         type: 'string',
