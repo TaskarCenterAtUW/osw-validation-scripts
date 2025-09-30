@@ -189,7 +189,7 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
   return {
     title: 'root',
     type: 'object',
-    required: ['type', 'features'],
+    required: ['type', 'features', '$schema'],
     additionalProperties: false,
     properties: {
       $schema: {
