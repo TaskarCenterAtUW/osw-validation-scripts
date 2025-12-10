@@ -2,6 +2,7 @@
 // Node.js generator for VALID and INVALID GeoJSON FeatureCollections, driven by the attached schema.
 
 const fs = require('fs');
+const path = require('path');
 
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
 
@@ -167,7 +168,7 @@ const sampleByType = (propName, propSchema, j, rnd) => {
  * @param {number} [options.numFeatures=1]  Number of features per tag
  */
 async function generateGeojsonSamples(tags, {
-  schemaPath = '/mnt/data/opensidewalks.schema.json',
+  schemaPath = path.join(process.cwd(), 'schema', 'opensidewalks.schema-0.3.json'),
   validOut = 'valid_sample.geojson',
   invalidOut = 'invalid_sample.geojson',
   seed = 0,
@@ -180,9 +181,10 @@ async function generateGeojsonSamples(tags, {
   const schema = loadSchema(schemaPath);
   const defs = schema.definitions || {};
   const rnd = mulberry32(seed);
+  const schemaId = schema.$id || schema.id || 'https://sidewalks.washington.edu/opensidewalks/0.3/schema.json';
   
-  const valid = { type: 'FeatureCollection', features: [] };
-  const invalid = { type: 'FeatureCollection', features: [] };
+  const valid = { type: 'FeatureCollection', $schema: schemaId, features: [] };
+  const invalid = { type: 'FeatureCollection', $schema: schemaId, features: [] };
   
   const getTagDef = (tagName) => {
     const def = defs[tagName];
@@ -232,8 +234,11 @@ async function generateGeojsonSamples(tags, {
       
       // INVALID variant — rotate failure mode
       const bad = JSON.parse(JSON.stringify(feature));
-      
-      if (enumRequired.length > 0) {
+
+      if (requiredList.includes('_w_id')) {
+        // For zones, missing _w_id is a common failure mode to highlight
+        delete bad.properties['_w_id'];
+      } else if (enumRequired.length > 0) {
         // Break a different enum each time (round-robin)
         const which = enumRequired[j % enumRequired.length];
         bad.properties[which] = `__INVALID_ENUM__${j}`; // guaranteed not in enum

@@ -5,10 +5,9 @@ const {buildSchemas} = require('./build-schemas')
 const outputDir = path.join(process.cwd(), 'output');
 const outputFile = path.join(outputDir, 'results.json');
 
-// take this path from schema
-
-const filePath = path.join(process.cwd(), 'schema', 'opensidewalks.schema.json');
-const schema = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+const defaultSchemaPath = path.join(process.cwd(), 'schema', 'opensidewalks.schema-0.3.json');
+const inputPath = process.argv[2] ? path.resolve(process.argv[2]) : defaultSchemaPath;
+const schema = JSON.parse(fs.readFileSync(inputPath, 'utf8'));
 const root = schema;
 
 
@@ -60,6 +59,17 @@ const inlineRefs = (node)=> {
   return node;
 }
 
+const detectVersion = (sch, fallback = '0.3') => {
+  const id = sch && (sch.$id || sch.id || '');
+  const m = typeof id === 'string' ? id.match(/opensidewalks\/([0-9.]+)\//) : null;
+  if (m && m[1]) return m[1];
+  // Fallback to filename suffix ...schema-0.3.json
+  const fname = path.basename(inputPath);
+  const m2 = fname.match(/schema-([0-9.]+)\.json$/);
+  if (m2 && m2[1]) return m2[1];
+  return fallback;
+};
+
 // --- main extraction ---
 const main = () => {
   const defs = root.definitions || root.$defs || {};
@@ -77,11 +87,12 @@ const main = () => {
       // Fully inline nested $ref inside the *Fields definition (e.g., Building → BuildingFields → BuildingField)
       const fieldsResolved = inlineRefs(deepClone(fieldsDef));
       
-      // Attach the geometry type (as a string like "GeoJSON.LineString") and the item name ("AlleyFields")
+      // Attach the geometry type (as a string like "GeoJSON.LineString"), the item name ("AlleyFields"), and the feature name ("Alley")
       results.push({
         ...fieldsResolved,
         geometryType: lastPointerSegment(geomRef),
         itemName: lastPointerSegment(propsRef),
+        featureName: defName,
       });
     }
   }
@@ -89,7 +100,7 @@ const main = () => {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(outputFile, JSON.stringify(results, null, 2), 'utf8');
   console.log(`Results written to ${outputFile}`);
-  buildSchemas(outputFile)
+  buildSchemas(outputFile, {version: detectVersion(schema), outputDir})
   
 };
 

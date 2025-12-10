@@ -1,29 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 
-const outputDir = path.join(process.cwd(), 'output');
+const defaultOutputDir = path.join(process.cwd(), 'output');
+
+const DEFAULT_VERSION = '0.3';
 
 const RENAME_MAP = {
   // _id: 'id',
   // _u_id: 'u_id', // uncomment if you want
   // _v_id: 'v_id', // uncomment if you want
 };
-
-const DISCRIMINATORS = new Set([
-  'highway',
-  'footway',
-  'service',
-  'barrier',
-  'amenity',
-  'power',
-  'man_made',
-  'building',
-]);
-
-// Properties that should not trigger dependency requirements
-const META_KEYS = new Set([
-  'name',
-]);
 
 const readJson = (p) => {
   return JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -106,12 +92,15 @@ const mergePropertySchemas = (acc, name, schema) => {
 }
 
 const positionSchema = () => {
+  // Allow optional altitude as the third dimension while keeping lon/lat required
   return {
     type: 'array',
+    minItems: 2,
     additionalItems: false,
     items: [
       {type: 'number', minimum: -180.0, maximum: 180.0}, // lon
       {type: 'number', minimum: -90.0, maximum: 90.0},   // lat
+      {type: 'number'},                                  // optional elevation
     ],
   };
 }
@@ -185,16 +174,26 @@ const geometrySchemaFor = (typeEnum) => {
   return base;
 }
 
-const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependenciesObj) => {
+const featureCollectionTemplate = (geometryTypeEnum, propertiesSchema, options = {}) => {
+  const { version = DEFAULT_VERSION, schemaName } = options;
+  const versionTag = version || DEFAULT_VERSION;
+  const baseName = schemaName || `${geometryTypeEnum[0].toLowerCase()}s`;
+  const $id = `https://sidewalks.washington.edu/opensidewalks/${versionTag}/${baseName}.schema.json`;
+
   return {
     title: 'root',
     type: 'object',
+    $id,
+    $schema: 'http://json-schema.org/draft-07/schema#',
     required: ['type', 'features', '$schema'],
     additionalProperties: false,
     properties: {
       $schema: {
         description: 'A field for the schema id.',
-        enum: ['https://sidewalks.washington.edu/opensidewalks/0.2/schema.json'],
+        enum: [
+          'https://sidewalks.washington.edu/opensidewalks/0.2/schema.json',
+          'https://sidewalks.washington.edu/opensidewalks/0.3/schema.json',
+        ],
         type: 'string',
       },
       dataSource: {
@@ -239,19 +238,7 @@ const featureCollectionTemplate = (geometryTypeEnum, propertiesObj, dependencies
               enum: ['Feature'],
             },
             geometry: geometrySchemaFor(geometryTypeEnum),
-            properties: {
-              title: 'propertiesObject',
-              type: 'object',
-              additionalProperties: false,
-              properties: propertiesObj,
-              required: ['_id'],
-              patternProperties: {
-                '^ext:': {},
-              },
-              ...(Object.keys(dependenciesObj || {}).length
-                ? {dependencies: dependenciesObj}
-                : {}),
-            },
+            properties: propertiesSchema,
           },
         },
       },
@@ -268,84 +255,60 @@ const renameKey = (obj, from, to) => {
 }
 
 const aggregateForGroup = (items) => {
-  // Union of property schemas
-  const properties = {};
-  
-  // dependencies builder:
-  // deps[propName] -> array of "contexts"
-  // where a context is an array of [{ required:[tag], properties:{ [tag]:{type:'string', const: 'val'} } }, ...]
-  const deps = {};
-  
+  const unionProperties = {};
+  const anyOfBranches = [];
+  let commonRequired = null;
+
   for (const item of items) {
     const props = item.properties || {};
     const propsCloned = deepClone(props);
-    
+
     // optional renames (e.g., _id -> id)
     for (const [from, to] of Object.entries(RENAME_MAP)) {
       renameKey(propsCloned, from, to);
     }
-    
+
+    const requiredList = Array.isArray(item.required) ? Array.from(new Set(item.required)) : [];
+    commonRequired = commonRequired == null
+      ? Array.from(requiredList)
+      : commonRequired.filter((r) => requiredList.includes(r));
+
     // merge prop schemas
     for (const [k, v] of Object.entries(propsCloned)) {
-      mergePropertySchemas(properties, k, v);
+      mergePropertySchemas(unionProperties, k, v);
     }
-    
-    // collect discriminator conditions for this item (single-valued enums only)
-    const discriminatorClauses = [];
-    for (const tag of DISCRIMINATORS) {
-      const tagSchema = propsCloned[tag];
-      const enums = tagSchema && Array.isArray(tagSchema.enum) ? tagSchema.enum : null;
-      if (enums && enums.length === 1) {
-        const val = enums[0];
-        discriminatorClauses.push({
-          required: [tag],
-          properties: {
-            [tag]: {type: 'string', const: val},
-          },
-        });
-      }
-    }
-    
-    // For each non-discriminator property, attach a dependency (if we have any discriminator clauses)
-    if (discriminatorClauses.length) {
-      for (const key of Object.keys(propsCloned)) {
-        if (DISCRIMINATORS.has(key)) continue; // don't create self-dependency
-        if (key.startsWith('_')) continue; // allow metadata fields like _id without extra tags
-        if (key.startsWith('ext:')) continue; // allow extension tags without extra tags
-        if (META_KEYS.has(key)) continue; // allow generic metadata fields like name
-        // Initialize bucket
-        if (!deps[key]) deps[key] = [];
-        // Push this item's condition set
-        deps[key].push(discriminatorClauses.map(c => deepClone(c)));
-      }
-    }
+
+    const patternProperties = item.patternProperties || {'^ext:.*$': {}};
+
+    anyOfBranches.push({
+      title: item.itemName || 'Fields',
+      type: 'object',
+      additionalProperties: item.additionalProperties === undefined ? false : item.additionalProperties,
+      properties: propsCloned,
+      required: requiredList,
+      ...(patternProperties ? {patternProperties} : {}),
+    });
   }
-  
-  // Build "dependencies" object:
-  // If a property has multiple contexts, use anyOf over those context-sets.
-  // Deduplicate identical context sets to avoid repeated schema branches.
-  const dependencies = {};
-  for (const [prop, contexts] of Object.entries(deps)) {
-    if (!contexts.length) continue;
-    const uniqueContexts = [];
-    const seen = new Set();
-    for (const ctx of contexts) {
-      const key = JSON.stringify(ctx);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      uniqueContexts.push(ctx);
-    }
-    
-    if (uniqueContexts.length === 1) {
-      dependencies[prop] = { allOf: uniqueContexts[0] };
-    } else {
-      dependencies[prop] = {
-        anyOf: uniqueContexts.map(ctx => ({ allOf: ctx })),
-      };
-    }
+
+  const propertiesSchema = {
+    title: 'propertiesObject',
+    type: 'object',
+    additionalProperties: false,
+    properties: unionProperties,
+    patternProperties: {
+      '^ext:.*$': {},
+    },
+  };
+
+  if (commonRequired && commonRequired.length) {
+    propertiesSchema.required = commonRequired;
   }
-  
-  return {properties, dependencies};
+
+  if (anyOfBranches.length) {
+    propertiesSchema.anyOf = anyOfBranches;
+  }
+
+  return propertiesSchema;
 }
 
 
@@ -355,54 +318,149 @@ const writeSchemaFile = (filename, schema) => {
 }
 
 
-const buildSchemas = (inputFile) => {
+const normalizeName = (name) => String(name || '').replace(/Fields$/, '');
+
+// Classification is driven by OSW 0.3 taxonomy:
+// - Nodes/Edges/Zones are core network elements
+// - Points/Lines/Polygons are adjacent/non-network entities
+const NODE_FEATURES = new Set([
+  'BareNode',
+  'CurbRamp',
+  'FlushCurb',
+  'GenericCurb',
+  'RaisedCurb',
+  'RolledCurb',
+]);
+
+const EDGE_FEATURES = new Set([
+  'Alley',
+  'Crossing',
+  'Driveway',
+  'Footway',
+  'LivingStreet',
+  'ParkingAisle',
+  'Pedestrian',
+  'PrimaryStreet',
+  'ResidentialStreet',
+  'SecondaryStreet',
+  'ServiceRoad',
+  'Sidewalk',
+  'Steps',
+  'TertiaryStreet',
+  'TrafficIsland',
+  'TrunkRoad',
+  'UnclassifiedRoad',
+]);
+
+const ZONE_FEATURES = new Set([
+  'PedestrianZone',
+]);
+
+const ADJ_POINT_FEATURES = new Set([
+  'Bench',
+  'Bollard',
+  'FireHydrant',
+  'Manhole',
+  'PowerPole',
+  'StreetLamp',
+  'Tree',
+  'WasteBasket',
+  'CustomPoint',
+]);
+
+const ADJ_LINE_FEATURES = new Set([
+  'Fence',
+  'TreeRow',
+  'CustomLine',
+]);
+
+const ADJ_POLYGON_FEATURES = new Set([
+  'Building',
+  'Wood',
+  'CustomPolygon',
+]);
+
+const buildSchemas = (inputFile, options = {}) => {
+  const { version = DEFAULT_VERSION, outputDir = defaultOutputDir, writeLegacy = true } = options;
   const data = readJson(inputFile);
   if (!Array.isArray(data)) {
     console.error('Input must be an array of field objects.');
     process.exit(1);
   }
   
-  const groups = {
-    LineString: [],
-    Point: [],
-    PolygonLike: [], // Polygon and/or MultiPolygon
+  const buckets = {
+    Nodes: [],
+    Edges: [],
+    Zones: [],
+    Points: [],
+    Lines: [],
+    Polygons: [],
+    LineStringAll: [],
+    PointAll: [],
+    PolygonAll: [],
   };
   
   for (const entry of data) {
-    const gset = parseGeometrySet(entry.geometryType);
-    if (gset.has('LineString')) groups.LineString.push(entry);
-    if (gset.has('Point')) groups.Point.push(entry);
-    if (gset.has('Polygon') || gset.has('MultiPolygon')) groups.PolygonLike.push(entry);
+    const featureName = normalizeName(entry.featureName || entry.itemName);
+    const geomSet = parseGeometrySet(entry.geometryType);
+    
+    if (geomSet.has('LineString')) buckets.LineStringAll.push(entry);
+    if (geomSet.has('Point')) buckets.PointAll.push(entry);
+    if (geomSet.has('Polygon') || geomSet.has('MultiPolygon')) buckets.PolygonAll.push(entry);
+    
+    if (NODE_FEATURES.has(featureName)) buckets.Nodes.push(entry);
+    else if (EDGE_FEATURES.has(featureName)) buckets.Edges.push(entry);
+    else if (ZONE_FEATURES.has(featureName)) buckets.Zones.push(entry);
+    else if (ADJ_POINT_FEATURES.has(featureName)) buckets.Points.push(entry);
+    else if (ADJ_LINE_FEATURES.has(featureName)) buckets.Lines.push(entry);
+    else if (ADJ_POLYGON_FEATURES.has(featureName)) buckets.Polygons.push(entry);
   }
   
-  // Build & write LineString schema (if any)
-  if (groups.LineString.length) {
-    const {properties, dependencies} = aggregateForGroup(groups.LineString);
-    const schema = featureCollectionTemplate(['LineString'], properties, dependencies);
-    writeSchemaFile(path.join(outputDir, 'lineSchema.json'), schema);
-  }
+  const outputNames = {
+    Nodes: `opensidewalks.nodes.schema-${version}.json`,
+    Edges: `opensidewalks.edges.schema-${version}.json`,
+    Zones: `opensidewalks.zones.schema-${version}.json`,
+    Points: `opensidewalks.points.schema-${version}.json`,
+    Lines: `opensidewalks.lines.schema-${version}.json`,
+    Polygons: `opensidewalks.polygons.schema-${version}.json`,
+    LineStringAll: `opensidewalks.line_all.schema-${version}.json`,
+    PointAll: `opensidewalks.point_all.schema-${version}.json`,
+    PolygonAll: `opensidewalks.polygon_all.schema-${version}.json`,
+  };
   
-  // Build & write Point schema (if any)
-  if (groups.Point.length) {
-    const {properties, dependencies} = aggregateForGroup(groups.Point);
-    const schema = featureCollectionTemplate(['Point'], properties, dependencies);
-    writeSchemaFile(path.join(outputDir, 'pointsSchema.json'), schema);
-  }
+  const legacyNames = {
+    LineStringAll: 'lineSchema.json',
+    PointAll: 'pointsSchema.json',
+    PolygonAll: 'PolygonSchema.json',
+  };
   
-  // Build & write Polygon/MultiPolygon schema (if any)
-  if (groups.PolygonLike.length) {
-    // Determine which polygon kinds exist to set enum correctly
-    const polyKinds = new Set();
-    for (const e of groups.PolygonLike) {
-      for (const k of parseGeometrySet(e.geometryType)) {
-        if (k === 'Polygon' || k === 'MultiPolygon') polyKinds.add(k);
-      }
+  const writeSchema = (key, schema) => {
+    if (!schema) return;
+    writeSchemaFile(path.join(outputDir, outputNames[key]), schema);
+    if (writeLegacy && legacyNames[key]) {
+      writeSchemaFile(path.join(outputDir, legacyNames[key]), schema);
     }
-    const geomEnum = Array.from(polyKinds.size ? polyKinds : ['Polygon']);
-    const {properties, dependencies} = aggregateForGroup(groups.PolygonLike);
-    const schema = featureCollectionTemplate(geomEnum, properties, dependencies);
-    writeSchemaFile(path.join(outputDir, 'PolygonSchema.json'), schema);
-  }
+  };
+  
+  const maybeBuild = (key, geomEnum) => {
+    const list = buckets[key];
+    if (!list || !list.length) return;
+    const properties = aggregateForGroup(list);
+    const schema = featureCollectionTemplate(geomEnum, properties, {version, schemaName: key.toLowerCase()});
+    writeSchema(key, schema);
+  };
+  
+  maybeBuild('Nodes', ['Point']);
+  maybeBuild('Edges', ['LineString']);
+  maybeBuild('Zones', ['Polygon']);
+  maybeBuild('Points', ['Point']);
+  maybeBuild('Lines', ['LineString']);
+  maybeBuild('Polygons', ['Polygon']);
+  
+  // Legacy combined schemas (all-by-geometry) to preserve previous behavior
+  maybeBuild('LineStringAll', ['LineString']);
+  maybeBuild('PointAll', ['Point']);
+  maybeBuild('PolygonAll', ['Polygon']);
 }
 
 module.exports = {

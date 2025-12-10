@@ -1,1 +1,1 @@
-jsonschema_rs
+jsonschema_rs>=0.16.0

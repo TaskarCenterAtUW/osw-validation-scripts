@@ -11,13 +11,13 @@ import jsonschema_rs
 # -----------------------------
 SCHEMA_PATH = os.path.join(os.path.dirname(__file__), 'schema')
 OUTPUT_PATH = os.path.join(os.path.dirname(__file__), 'output')
-ORIGINAL_SCHEMA = os.path.join(SCHEMA_PATH, 'opensidewalks.schema.json')
-LINE_STRING_SCHEMA = os.path.join(OUTPUT_PATH, 'lineSchema.json')
-POINT_SCHEMA = os.path.join(OUTPUT_PATH, 'pointsSchema.json')
-POLY_SCHEMA = os.path.join(OUTPUT_PATH, 'PolygonSchema.json')
+ORIGINAL_SCHEMA = os.path.join(SCHEMA_PATH, 'opensidewalks.schema-0.3.json')
+LINE_STRING_SCHEMA = os.path.join(SCHEMA_PATH, 'schema.edge.0.3.json')
+POINT_SCHEMA = os.path.join(OUTPUT_PATH, 'opensidewalks.nodes.schema-0.3.json')
+POLY_SCHEMA = os.path.join(OUTPUT_PATH, 'opensidewalks.zones.schema-0.3.json')
 
-VALID_FILE = 'my_valid.geojson' # Update with your valid file path
-INVALID_FILE = 'my_invalid.geojson' # Update with your invalid file path
+VALID_FILE = os.path.join(os.path.dirname(__file__), 'samples_edges_valid.geojson') # Update with your valid file path
+INVALID_FILE = os.path.join(os.path.dirname(__file__), 'samples_edges_invalid.geojson') # Update with your invalid file path
 
 
 # -----------------------------
